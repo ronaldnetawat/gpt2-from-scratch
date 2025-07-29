@@ -32,7 +32,7 @@ class CausalSelfAttention(nn.Module):
                                         .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
-        B, T, C = x.size() # batch_size, context_size, embedding dimensions
+        B, T, C = x.size() # (batch_size, block_size, n_embd)
 
         # produce q, k, and v
         qkv = self.c_attn(x) # one large matrix
@@ -99,22 +99,25 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classifier
 
     
-    def forward(self, idx, targets=None):
-        device = idx.device
+    def forward(self, idx):
+        # device = idx.device
         B, T = idx.size()
+        # assert max context_size or block_size
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, T, dtype=torch.long, device=device) # shape (t)
+        
+        # forward the embeddings
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (t)
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = tok_emb + pos_emb
+        # forward the blocks of the transformer
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
 
         logits = self.lm_head(x) # (B, T, C)
-
         return logits
     
     @classmethod
@@ -131,9 +134,11 @@ class GPT(nn.Module):
             'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
             'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
         }[model_type]
-        print("forcing vocab_size=50257, block_size=1024, bias=True")
+        # print("forcing vocab_size=50257, block_size=1024, bias=True")
         config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
         config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
+
+        # our model and keys
         # create a from-scratch initialized minGPT model
         config = GPTConfig(**config_args)
         model = GPT(config)
@@ -149,6 +154,8 @@ class GPT(nn.Module):
         sd_keys_hf = sd_hf.keys()
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
+
+
         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
         # this means that we have to transpose these weights when we import them
@@ -171,8 +178,42 @@ class GPT(nn.Module):
 # ================================================================
 
 num_return_sequences = 5
-max_length = 30
+max_length = 20
 
-model = GPT.from_pretrained("gpt2")
+model = GPT.from_pretrained('gpt2')
 model.eval()
-model.to('cuda')
+
+# Ensure MPS is available
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"using device: {device}")
+model.to(device)
+
+# prefix tokens for inference
+import tiktoken
+enc = tiktoken.get_encoding('gpt2')
+tokens = enc.encode("Hello, I'm a language model,")
+tokens = torch.tensor(tokens, dtype=torch.long)
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # repeat 5 times
+x = tokens.to(device)
+
+
+# function to generate
+torch.manual_seed(42)
+# torch.cuda.manual_seed(42)
+
+while x.size(1) < max_length:
+    # won't compute gradients
+    with torch.no_grad():
+        logits = model(x)
+        logits = logits[:,-1,:] # only keep the logits (last col of T)
+        probs = F.softmax(logits, dim=-1) # get the probabilities
+        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1) # only keep the top 50 most likely tokens
+        ix = torch.multinomial(topk_probs, 1) # (B, 1) sample one for each batch
+        xcol = torch.gather(topk_indices, -1, ix) # get the indices
+        x = torch.cat((x, xcol), dim=1) # append to the last column
+
+# finally, print the generated code
+for i in range(num_return_sequences):
+    tokens = x[i, :max_length].tolist()
+    decoded = enc.decode(tokens)
+    print(">", decoded)
