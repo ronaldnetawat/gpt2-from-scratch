@@ -99,7 +99,7 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classifier
 
     
-    def forward(self, idx, targets):
+    def forward(self, idx, targets=None):
         # device = idx.device
         B, T = idx.size()
         # assert max context_size or block_size
@@ -186,7 +186,7 @@ if torch.cuda.is_available():
 elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
-device = "cpu" # override for now
+# device = "cpu" # override for now
 
 
 # data loader, get a batch of data
@@ -198,20 +198,31 @@ text = text[:1000]
 tokens = enc.encode(text)
 B, T = 4, 32 # for now
 buf = torch.tensor(tokens[:B*T + 1])
+buf = buf.to(device) # move buf to GPU, use buf=buf.to(device), otherwise it makes a pointer to GPU memory
 x = buf[:-1].view(B, T)
 y = buf[1:].view(B, T)
 
 # get logits for our model
 model = GPT(GPTConfig())
-# model.eval()
 model.to(device)
-logits, loss = model(x, y)
+# logits, loss = model(x, y)
 
-print(loss)
+# optimizer
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for i in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"step: {i}, loss: {loss.item()}")
+
 import sys; sys.exit(0)
 
 # prefix tokens for inference
 # tokenize using tiktoken
+model.eval()
+num_return_sequences = 5
+max_length = 20
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
 tokens = enc.encode("Hello, I'm a language model,")
