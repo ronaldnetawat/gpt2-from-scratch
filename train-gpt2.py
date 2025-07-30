@@ -98,6 +98,9 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classifier
 
+        # sharing the same weight for wte and lm_head (according to papers: Vaswani, and other)
+        self.transformer.wte.weight = self.lm_head.weight
+
     
     def forward(self, idx, targets=None):
         # device = idx.device
@@ -179,6 +182,38 @@ class GPT(nn.Module):
 
 # ================================================================
 
+import tiktoken
+
+# simple DataLoader class for getting batches
+class DataLoaderSimple:
+    def __init__(self, B, T): 
+        self.B = B # batch dim
+        self.T = T # time dim
+
+        enc = tiktoken.get_encoding('gpt2')
+        with open('input.txt', 'r') as f:
+            text = f.read() # read the entire file
+        tokens = enc.encode(text) # encode using encoder
+        self.tokens = torch.tensor(tokens)
+        print(f"loaded {len(self.tokens)} tokens")  # print total # of tokens in dataset
+        print(f"1 epoch has {len(self.tokens) // (B*T)} batches")   # print how many batches each epoch will have before returning to the beginning of dataset
+
+        # start at first token
+        self.current_position = 0
+
+    # method to get next batch
+    def next_batch(self):
+        B,T = self.B, self.T
+        buf = self.tokens[self.current_position : self.current_position + B*T + 1] # +1 for targets
+        x = buf[:-1].view(B, T) # input tensor
+        y = buf[1:].view(B, T) # target tensor
+        # next position in tensor, goes up by B*T
+        self.current_position += B*T
+        # if at the end of data
+        if self.current_position+(B*T)+1 > len(self.tokens):
+            self.current_position = 0
+        return x, y
+
 # device config
 device = "cpu"
 if torch.cuda.is_available():
@@ -186,21 +221,12 @@ if torch.cuda.is_available():
 elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
-# device = "cpu" # override for now
 
 
-# data loader, get a batch of data
-import tiktoken
-enc = tiktoken.get_encoding('gpt2')
-with open('input.txt', 'r') as f:
-    text = f.read()
-text = text[:1000]
-tokens = enc.encode(text)
-B, T = 4, 32 # for now
-buf = torch.tensor(tokens[:B*T + 1])
-buf = buf.to(device) # move buf to GPU, use buf=buf.to(device), otherwise it makes a pointer to GPU memory
-x = buf[:-1].view(B, T)
-y = buf[1:].view(B, T)
+# get training data
+train_loader = DataLoaderSimple(B=4, T=32) # (4, 32) batches
+
+
 
 # get logits for our model
 model = GPT(GPTConfig())
@@ -208,8 +234,11 @@ model.to(device)
 # logits, loss = model(x, y)
 
 # optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4) # good LR for initial debugging stage
 for i in range(50):
+    x, y = train_loader.next_batch()
+    x = x.to(device)
+    y = y.to(device)
     optimizer.zero_grad()
     logits, loss = model(x, y)
     loss.backward()
