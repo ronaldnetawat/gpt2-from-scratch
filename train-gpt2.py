@@ -99,7 +99,7 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # final classifier
 
     
-    def forward(self, idx):
+    def forward(self, idx, targets):
         # device = idx.device
         B, T = idx.size()
         # assert max context_size or block_size
@@ -116,9 +116,11 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
-
         logits = self.lm_head(x) # (B, T, C)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
     
     @classmethod
     def from_pretrained(cls, model_type):
@@ -177,18 +179,39 @@ class GPT(nn.Module):
 
 # ================================================================
 
-num_return_sequences = 5
-max_length = 20
-
-model = GPT.from_pretrained('gpt2')
-model.eval()
-
-# Ensure MPS is available
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+# device config
+device = "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = "mps"
 print(f"using device: {device}")
+device = "cpu" # override for now
+
+
+# data loader, get a batch of data
+import tiktoken
+enc = tiktoken.get_encoding('gpt2')
+with open('input.txt', 'r') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32 # for now
+buf = torch.tensor(tokens[:B*T + 1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+
+# get logits for our model
+model = GPT(GPTConfig())
+# model.eval()
 model.to(device)
+logits, loss = model(x, y)
+
+print(loss)
+import sys; sys.exit(0)
 
 # prefix tokens for inference
+# tokenize using tiktoken
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
 tokens = enc.encode("Hello, I'm a language model,")
@@ -197,7 +220,7 @@ tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # repeat 5 times
 x = tokens.to(device)
 
 
-# function to generate
+# function to generate text
 torch.manual_seed(42)
 # torch.cuda.manual_seed(42)
 
