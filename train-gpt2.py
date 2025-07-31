@@ -272,7 +272,11 @@ for i in range(50):
     x = x.to(device)
     y = y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
+    # using blackwell architecture for now. this is for ampere usually.
+    # only apply this to model output and loss in forward pass, not to .backward() and .step()
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        logits, loss = model(x, y)
+        # import code; code.interact(local=locals())
     loss.backward()
     optimizer.step()
     torch.cuda.synchronize() # wait for GPU to finish processes
