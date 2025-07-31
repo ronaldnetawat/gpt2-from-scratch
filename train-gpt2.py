@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import torch
+from torch.cpu import is_available
 import torch.nn as nn
 from torch.nn import functional as F
 import math
@@ -23,6 +24,7 @@ class CausalSelfAttention(nn.Module):
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         # project back to n_embd 
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj.RESIDUAL_INIT = 1
         # regularization
         # self.dropout = config.dropout
         self.n_head= config.n_head
@@ -61,6 +63,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embd, 4*config.n_embd) # expand embedding dim
         self.gelu = nn.GELU(approximate="tanh") # GELU nonlinearity, as per GPT2
         self.c_proj = nn.Linear(4*config.n_embd, config.n_embd) # project back down to n_embd
+        self.c_proj.RESIDUAL_INIT = 1
 
     def forward(self, x):
         x = self.c_fc(x)
@@ -109,7 +112,10 @@ class GPT(nn.Module):
     def _init_weights(self, module):
         # for linear modules
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0,std=0.02)
+            std = 0.02
+            if hasattr(module, 'RESIDUAL_INIT'):
+                std *= (2*self.config.n_layer) **-0.5 # scale down by 1/sqrt(n)
+            torch.nn.init.normal_(module.weight, mean=0.0,std=std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias) # set bias weights to 0
         # for embedding modules, use the same params as linear
@@ -236,6 +242,11 @@ if torch.cuda.is_available():
 elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
+
+
+torch.manual_seed(1337)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(1337)
 
 
 # get training data
