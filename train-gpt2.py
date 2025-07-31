@@ -101,6 +101,21 @@ class GPT(nn.Module):
         # sharing the same weight for wte and lm_head (according to papers: Vaswani, and other)
         self.transformer.wte.weight = self.lm_head.weight
 
+        # initialize the parameters
+        self.apply(self._init_weights)
+
+    
+    # initializing weights according to GPT2
+    def _init_weights(self, module):
+        # for linear modules
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0,std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias) # set bias weights to 0
+        # for embedding modules, use the same params as linear
+        elif isinstance(module, nn.Embedding):
+           torch.nn.init.normal_(module.weight, mean=0.0,std=0.02) 
+
     
     def forward(self, idx, targets=None):
         # device = idx.device
