@@ -235,6 +235,9 @@ class DataLoaderSimple:
             self.current_position = 0
         return x, y
 
+
+import time
+
 # device config
 device = "cpu"
 if torch.cuda.is_available():
@@ -250,7 +253,7 @@ if torch.cuda.is_available():
 
 
 # get training data
-train_loader = DataLoaderSimple(B=4, T=32) # (4, 32) batches
+train_loader = DataLoaderSimple(B=8, T=1024) # (16, 1024) batches
 
 
 
@@ -262,6 +265,7 @@ model.to(device)
 # optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4) # good LR for initial debugging stage
 for i in range(50):
+    t0 = time.time()
     x, y = train_loader.next_batch()
     x = x.to(device)
     y = y.to(device)
@@ -269,7 +273,11 @@ for i in range(50):
     logits, loss = model(x, y)
     loss.backward()
     optimizer.step()
-    print(f"step: {i}, loss: {loss.item()}")
+    torch.cuda.synchronize() # wait for GPU to finish processes
+    t1 = time.time()
+    dt = (t1 - t0)*1000 # in ms
+    tokens_per_sec = (train_loader.B * train_loader.T) // (t1 - t0)
+    print(f"step: {i}, loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
 import sys; sys.exit(0)
 
