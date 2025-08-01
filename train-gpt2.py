@@ -253,7 +253,7 @@ if torch.cuda.is_available():
 
 
 # get training data
-train_loader = DataLoaderSimple(B=8, T=1024) # (16, 1024) batches
+train_loader = DataLoaderSimple(B=16, T=1024) # (16, 1024) batches
 
 
 
@@ -261,6 +261,7 @@ train_loader = DataLoaderSimple(B=8, T=1024) # (16, 1024) batches
 model = GPT(GPTConfig())
 model.to(device)
 # logits, loss = model(x, y)
+print("version1")
 
 # optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4) # good LR for initial debugging stage
