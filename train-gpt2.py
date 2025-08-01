@@ -46,11 +46,14 @@ class CausalSelfAttention(nn.Module):
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, T, nh, hs) --> (B, nh, T, hs)
 
         # attention calculation, with scaled attention
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, hs) @ (B, nh, hs, T) --> (B, nh, T, T)
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) # causal masking
-        att = F.softmax(att, dim=-1) # softmax the outputs
-        # att = self.attn_dropout(att) # regularization
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) --> (B, nh, T, hs), calculate value vectors
+        # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, hs) @ (B, nh, hs, T) --> (B, nh, T, T)
+        # att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) # causal masking
+        # att = F.softmax(att, dim=-1) # softmax the outputs
+        # y = att @ v # (B, nh, T, T) x (B, nh, T, hs) --> (B, nh, T, hs), calculate value vectors
+
+        # FlashAttention using torch.nn.functional.scaled_dot_product_attention
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # this optimizes for kernel fusion
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble and concatenate heads
         # output projection to mix information across heads after attention application
         y = self.c_proj(y)
