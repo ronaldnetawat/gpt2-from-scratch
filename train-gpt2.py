@@ -14,6 +14,7 @@ class GPTConfig:
     n_embd: int = 768 # number of embedding dimensions
     # bias: bool = True # true: Linear layers and LayerNorms, False: better and faster
     # dropout: float = 0.0
+    # check
 
 
 class CausalSelfAttention(nn.Module):
