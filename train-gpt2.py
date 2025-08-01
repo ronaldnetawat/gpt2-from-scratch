@@ -293,7 +293,6 @@ for i in range(50):
 
 import sys; sys.exit(0)
 
-
 # prefix tokens for inference
 # tokenize using tiktoken
 model.eval()
