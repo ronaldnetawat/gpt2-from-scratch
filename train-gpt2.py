@@ -283,12 +283,13 @@ for i in range(50):
         logits, loss = model(x, y)
         # import code; code.interact(local=locals())
     loss.backward()
+    norm = torch.nn.utils.clip_grad_norm(model.parameters(),1.0) # clip the norm at 1
     optimizer.step()
     torch.cuda.synchronize() # wait for GPU to finish processes
     t1 = time.time()
     dt = (t1 - t0)*1000 # in ms
     tokens_per_sec = (train_loader.B * train_loader.T) // (t1 - t0)
-    print(f"step: {i}, loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
+    print(f"step: {i}, loss: {loss.item()}, norm: {norm:.4f}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
 import sys; sys.exit(0)
 
