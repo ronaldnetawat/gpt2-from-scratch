@@ -264,13 +264,13 @@ torch.set_float32_matmul_precision('high')
 
 
 # get logits for our model
-model = GPT(GPTConfig())
+model = GPT(GPTConfig(vocab_size=50304))
 model.to(device)
 model = torch.compile(model)
 # logits, loss = model(x, y)
 
 # optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4) # good LR for initial debugging stage
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9,0.95), eps=1e-8) # good LR for initial debugging stage
 for i in range(50):
     t0 = time.time()
     x, y = train_loader.next_batch()
