@@ -7,6 +7,7 @@ import math
 import os
 from torch.distributed import init_process_group, destroy_process_group
 import inspect
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 @dataclass
 class GPTConfig:
@@ -355,17 +356,18 @@ if master_process:
     print(f"gradient accumulation steps per epoch: {grad_accum_steps}")
 
 # get training data
-train_loader = DataLoaderSimple(B=B, T=T) # (16, 1024) batches
+train_loader = DataLoaderSimple(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size) # (16, 1024) batches
 
 # enable tf32 for faster training
 torch.set_float32_matmul_precision('high')
 
 
-# get logits for our model
+# create our model
 model = GPT(GPTConfig(vocab_size=50304))
 model.to(device)
 model = torch.compile(model)
-# logits, loss = model(x, y)
+if ddp:
+    model = DDP(model, device_ids=[ddp_local_rank])
 
 # consts for lr_scheduling (acc. to GPT3)
 max_lr = 6e-4
