@@ -4,6 +4,7 @@ from torch.cpu import is_available
 import torch.nn as nn
 from torch.nn import functional as F
 import math
+import inspect
 
 @dataclass
 class GPTConfig:
@@ -203,6 +204,33 @@ class GPT(nn.Module):
                     sd[k].copy_(sd_hf[k])
 
         return model
+
+
+    # function to configure theh optimizer with weiht decay etc.
+    def config_optim(self, weight_decay, learning_rate, device):
+        # all params that require a gradient
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # onnly use weight_decay for matmuls, embeddings, not for 1-D weights like biases, LayerNorm etc.
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        no_decay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0}
+        ]
+        # count number of decay and no_Decay params
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_no_decay_params = sum(p.numel() for p in no_decay_params)
+        # print them 
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(no_decay_params)}, with {num_no_decay_params:,} parameters")
+        # fuse the AdamW optimizer
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and 'cuda' in device
+        print(f"using fused AdamW: {use_fused}")
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9,0.95), eps=1e-8, fused=use_fused)
+        return optimizer
+
     
 
 # ================================================================
@@ -290,7 +318,9 @@ def get_lr(it):
     return min_lr + coeff * (max_lr - min_lr)
 
 # optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9,0.95), eps=1e-8) # good LR for initial debugging stage
+# optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9,0.95), eps=1e-8) # good LR for initial debugging stage
+optimizer = model.config_optim(weight_decay=0.1, learning_rate=6e-4, device=device)
+
 for i in range(max_steps):
     t0 = time.time()
     x, y = train_loader.next_batch()
