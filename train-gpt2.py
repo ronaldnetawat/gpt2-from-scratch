@@ -8,6 +8,7 @@ import os
 from torch.distributed import init_process_group, destroy_process_group
 import inspect
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 
 @dataclass
 class GPTConfig:
@@ -405,7 +406,11 @@ for i in range(max_steps):
             logits, loss = model(x, y)
         loss = loss/grad_accum_steps  # reduction by mean for cross entropy: normalizer
         loss_accum += loss.detach() # leaf nodes
+        if ddp:
+            model.require_backward_grad_sync = (micro_steps == grad_accum_steps-1) # only synchronize grads at the last run
         loss.backward()
+    if ddp:
+        dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG) # this is the averaged loss across all processes
     
     # using blackwell architecture for now. this is for ampere usually.
     # only apply this to model output and loss in forward pass, not to .backward() and .step()
@@ -419,9 +424,13 @@ for i in range(max_steps):
     torch.cuda.synchronize() # wait for GPU to finish processes
     t1 = time.time()
     dt = (t1 - t0) # in ms
-    total_tok_processed = train_loader.B * train_loader.T * grad_accum_steps # incorporate grad accum factor
+    total_tok_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size # incorporate grad accum factor and num processes
     tokens_per_sec = total_tok_processed/dt
-    print(f"step: {i}, loss: {loss_accum.item()}, lr: {lr:.4f},  norm: {norm:.4f}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
+    if master_process:
+        print(f"step: {i},  loss: {loss_accum.item()}, lr: {lr:.4f},  norm: {norm:.4f}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
+
+if ddp:
+    destroy_process_group()
 
 import sys; sys.exit(0)
 
