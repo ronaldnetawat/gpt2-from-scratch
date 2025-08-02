@@ -4,6 +4,8 @@ from torch.cpu import is_available
 import torch.nn as nn
 from torch.nn import functional as F
 import math
+import os
+from torch.distributed import init_process_group, destroy_process_group
 
 @dataclass
 class GPTConfig:
@@ -238,7 +240,35 @@ class DataLoaderSimple:
         if self.current_position+(B*T)+1 > len(self.tokens):
             self.current_position = 0
         return x, y
+    
+# Model definition complete
+# ==========================================================
+# training and inference code
 
+# set up DDP
+ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
+if ddp:
+    assert torch.cuda.is_available(), "we prolly need CUDA for DDP"
+    init_process_group(backend='nccl')
+    ddp_rank = int(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    device = f'cuda:{ddp_local_rank}'
+    torch.cuda.set_device(device)
+    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
+else:
+    # if not ddp, we are running on a single gpu, and one process
+    ddp_rank = 0
+    ddp_local_rank = 0
+    master_process = True
+    ddp_world_size = 1
+    # autodetect device
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    print(f"using device: {device}")
 
 import time
 
