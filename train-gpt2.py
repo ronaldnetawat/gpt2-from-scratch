@@ -268,9 +268,11 @@ import tiktoken
 
 # simple DataLoader class for getting batches
 class DataLoaderSimple:
-    def __init__(self, B, T): 
+    def __init__(self, B, T, process_rank, num_processes): 
         self.B = B # batch dim
         self.T = T # time dim
+        self.process_rank = process_rank
+        self.num_processes = num_processes
 
         enc = tiktoken.get_encoding('gpt2')
         with open('input.txt', 'r') as f:
@@ -278,10 +280,11 @@ class DataLoaderSimple:
         tokens = enc.encode(text) # encode using encoder
         self.tokens = torch.tensor(tokens)
         print(f"loaded {len(self.tokens)} tokens")  # print total # of tokens in dataset
-        print(f"1 epoch has {len(self.tokens) // (B*T)} batches")   # print how many batches each epoch will have before returning to the beginning of dataset
+        # print(f"1 epoch has {len(self.tokens) // (B*T)} batches")   # print how many batches each epoch will have before returning to the beginning of dataset
 
-        # start at first token
-        self.current_position = 0
+
+        # state for all processes
+        self.current_position = self.B * self.T * self.process_rank
 
     # method to get next batch
     def next_batch(self):
@@ -290,15 +293,16 @@ class DataLoaderSimple:
         x = buf[:-1].view(B, T) # input tensor
         y = buf[1:].view(B, T) # target tensor
         # next position in tensor, goes up by B*T
-        self.current_position += B*T
+        self.current_position += B*T* self.num_processes
         # if at the end of data
-        if self.current_position+(B*T)+1 > len(self.tokens):
-            self.current_position = 0
+        if self.current_position+(B*T * self.num_processes + 1) > len(self.tokens):
+            self.current_position = self.B * self.T * self.process_rank
         return x, y
     
 # Model definition complete
 # ==========================================================
 # training and inference code
+# torchrun command: torchrun --standalone --nproc_per_node=8 train-gpt2.py
 
 # set up DDP
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
@@ -310,7 +314,7 @@ if ddp:
     ddp_world_size = int(os.environ['WORLD_SIZE'])
     device = f'cuda:{ddp_local_rank}'
     torch.cuda.set_device(device)
-    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
+    master_process = ddp_rank == 0 # logging, checkpointing etc.
 else:
     # if not ddp, we are running on a single gpu, and one process
     ddp_rank = 0
@@ -344,10 +348,11 @@ if torch.cuda.is_available():
 total_batch_size = 524288 # closest 2^x to 0.5M
 B = 16 # micro batch
 T = 1024 # seq. length
-assert total_batch_size % (B*T) == 0
-grad_accum_steps = total_batch_size // (B*T)
-print(f"total batch size: {total_batch_size}")
-print(f"gradient accumulation steps per epoch: {grad_accum_steps}")
+assert total_batch_size % (B*T*ddp_world_size) == 0
+grad_accum_steps = total_batch_size // (B*T*ddp_world_size) # parallel processes
+if master_process:
+    print(f"total batch size: {total_batch_size}")
+    print(f"gradient accumulation steps per epoch: {grad_accum_steps}")
 
 # get training data
 train_loader = DataLoaderSimple(B=B, T=T) # (16, 1024) batches
