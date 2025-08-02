@@ -283,9 +283,17 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
+# gradient accumulation to get 0.5M batch size
+total_batch_size = 524288 # closest 2^x to 0.5M
+B = 16 # micro batch
+T = 1024 # seq. length
+assert total_batch_size % (B*T) == 0
+grad_accum_steps = total_batch_size // (B*T)
+print(f"total batch size: {total_batch_size}")
+print(f"gradient accumulation steps per epoch: {grad_accum_steps}")
 
 # get training data
-train_loader = DataLoaderSimple(B=16, T=1024) # (16, 1024) batches
+train_loader = DataLoaderSimple(B=B, T=T) # (16, 1024) batches
 
 # enable tf32 for faster training
 torch.set_float32_matmul_precision('high')
@@ -323,16 +331,21 @@ optimizer = model.config_optim(weight_decay=0.1, learning_rate=6e-4, device=devi
 
 for i in range(max_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
-    x = x.to(device)
-    y = y.to(device)
     optimizer.zero_grad()
+    loss_accum = 0.0
+    for micro_steps in range(grad_accum_steps):
+        x, y = train_loader.next_batch()
+        x = x.to(device)
+        y = y.to(device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)
+        loss = loss/grad_accum_steps  # reduction by mean for cross entropy: normalizer
+        loss_accum += loss.detach() # leaf nodes
+        loss.backward()
+    
     # using blackwell architecture for now. this is for ampere usually.
     # only apply this to model output and loss in forward pass, not to .backward() and .step()
-    with torch.autocast(device_type=device, dtype=torch.bfloat16):
-        logits, loss = model(x, y)
-        # import code; code.interact(local=locals())
-    loss.backward()
+
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(),1.0) # clip the norm at 1
     # lr_scheduling
     lr = get_lr(i)
@@ -341,9 +354,10 @@ for i in range(max_steps):
     optimizer.step()
     torch.cuda.synchronize() # wait for GPU to finish processes
     t1 = time.time()
-    dt = (t1 - t0)*1000 # in ms
-    tokens_per_sec = (train_loader.B * train_loader.T) // (t1 - t0)
-    print(f"step: {i}, loss: {loss.item()}, lr: {lr:.4f},  norm: {norm:.4f}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
+    dt = (t1 - t0) # in ms
+    total_tok_processed = train_loader.B * train_loader.T * grad_accum_steps # incorporate grad accum factor
+    tokens_per_sec = total_tok_processed/dt
+    print(f"step: {i}, loss: {loss_accum.item()}, lr: {lr:.4f},  norm: {norm:.4f}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
 import sys; sys.exit(0)
 
